@@ -39,6 +39,11 @@ state = {"application": None, "bot_info": {}}
 async def lifespan(app: FastAPI):
     if TELEGRAM_TOKEN:
         try:
+            try:
+                await near.catalog.load()
+                logger.info("Token catalog loaded: %d assets", len(near.catalog._tokens))
+            except Exception:
+                logger.exception("catalog load failed (will retry lazily)")
             application = botmod.create_application(TELEGRAM_TOKEN, db, near)
             await application.initialize()
             await application.start()
@@ -47,12 +52,12 @@ async def lifespan(app: FastAPI):
             state["bot_info"] = {"username": me.username, "name": me.first_name}
             from telegram import BotCommand
             await application.bot.set_my_commands([
-                BotCommand("bridge", "Start a new Base to Starknet bridge"),
-                BotCommand("addresses", "Manage your saved addresses"),
-                BotCommand("history", "See your recent bridges"),
-                BotCommand("privacy", "How your privacy is protected"),
-                BotCommand("forget", "Wipe all your saved data"),
-                BotCommand("start", "Show the main menu"),
+                BotCommand("start", "Choose a mode or type a swap"),
+                BotCommand("swap", "Universal swap (any coin / chain)"),
+                BotCommand("addresses", "Your saved address book"),
+                BotCommand("history", "Recent swaps"),
+                BotCommand("privacy", "Privacy toolkit"),
+                BotCommand("clear", "Wipe all your data"),
             ])
             if PUBLIC_BASE_URL:
                 url = f"{PUBLIC_BASE_URL}/api/telegram/webhook/{WEBHOOK_SECRET}"
@@ -60,7 +65,7 @@ async def lifespan(app: FastAPI):
                     url=url, allowed_updates=Update.ALL_TYPES, drop_pending_updates=True
                 )
                 logger.info("Telegram webhook set to %s", url)
-            botmod.start_poller(application)
+            botmod.start_pollers(application)
             logger.info("Bot @%s started", me.username)
         except Exception:
             logger.exception("Failed to start Telegram bot")
@@ -68,7 +73,7 @@ async def lifespan(app: FastAPI):
     app_ = state.get("application")
     if app_:
         try:
-            await botmod.stop_poller()
+            await botmod.stop_pollers()
             await app_.stop()
             await app_.shutdown()
         except Exception:
