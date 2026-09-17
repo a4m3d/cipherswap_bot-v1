@@ -33,6 +33,13 @@ User wants a "crypto wallet" that: when USDC is sent on Base, auto-converts it t
 
 ## Backlog / Next
 - P0: Wire Layerswap for true USDC→USDC on Starknet (needs Mainnet API key from user).
+
+## Fixes / Hardening (2026-09-17)
+- 🐞 FIXED `/invoice`: inline-button callback_data held full address/link (>64B) → Telegram `Button_data_invalid` → card never sent. Now uses short `cxl:<sid>` (12B). Verified by testing_agent (no Button_data_invalid; invoice row with sid/is_invoice persists).
+- ✅ Added **Cancel transaction** button on every /bridge and /invoice card (`cxl:<sid>` → sets swap status CANCELLED; poller stops tracking; blocks if deposit already detected). Verified.
+- ✅ Robustness (no-hang): global error handler messages the user; `_send_deposit_card` falls back to text if photo send fails; ConversationHandler `conversation_timeout=300s` with TIMEOUT handler; friendly timeout/min-amount error messages; bridge_start send wrapped so state always advances; httpx token logging disabled.
+- ✅ Bridge/invoice QR now encodes EIP-681 payment link so wallets auto-fill token+network+amount on scan; tap-to-copy address/link via monospace.
+- ✅ Deployment health check: PASS (no blockers).
 - P1: Show USDC-equivalent value more prominently; provider toggle (NEAR vs Layerswap).
 - P1: Explorer links (basescan/starkscan) + swap detail in /history.
 - P2: Minimum-received / slippage display; refund status detail; per-user default address quick-pick.

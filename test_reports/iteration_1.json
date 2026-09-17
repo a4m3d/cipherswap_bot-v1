@@ -1,0 +1,32 @@
+{
+  "summary": "Tested Telegram bridge bot: invoice bug fix, cancel callback, webhook security, backend endpoints, frontend landing. 6/7 pytest assertions passed. The /bridge full conversation flow cannot be verified via fake chat because bridge_start's initial reply_text raises 'Chat not found' before returning the next conversation state, blocking downstream text handlers where address save/swap insert occur. This is NOT the invoice bug — invoice DB writes happen before the failing send, and pass correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/telegram/webhook (bridge conversation)", "issue": "bridge_start() calls reply_text before returning ConversationHandler state; if reply_text fails (e.g., real chat unreachable), ConversationHandler stays in ConversationHandler.END and subsequent text messages (Starknet addr, Base addr, amount) are ignored — so no user save / swap insert occurs. Consider try/except around reply_text or move save-address logic into bridge_start so state can still transition."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "OPTIONAL: Make bridge_start robust to Telegram send failures so the state transition (and later DB writes) still happen. Real users won't hit 'Chat not found' but this improves resilience and matches the invoice pattern.",
+    "The invoice bug fix (short 'cxl:<sid>' callback_data) is verified — NO Button_data_invalid in logs during test run. No action needed."
+  ],
+  "critical_code_review_comments": [
+    "bot.py: _send_deposit_card catches send_photo error and falls back to send_message, but if that also fails the DB record remains without user notification. For invoice flow this is acceptable because sid + status are already persisted, but consider surfacing a warning.",
+    "bot.py cb_cancel: uses q.message.chat.id — for the callback_query 'message' payload in tests we had to supply a full message stub; PTB may raise if 'message' is None (older TG). Not blocking.",
+    "server.py: telegram_webhook does not verify the 'X-Telegram-Bot-Api-Secret-Token' header (only the URL secret). URL secret is fine but header check is standard practice.",
+    "near_client.py timeout=25s could be too aggressive under network jitter; consider retry with backoff on transient 5xx from 1click."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "86% (6/7 pytest)", "frontend": "100% (landing loads with @swaswabotbot handle + QR)"},
+  "seed_data_creation": "Test seeded users doc for chat_id 900900900 with SN + Base addresses for invoice test. Cleanup fixture deletes users + swaps for CHAT_ID=900900900 after run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Bug fix for /invoice is verified end-to-end: pytest asserts a swaps doc {is_invoice:true, sid:<hex8>, status:PENDING_DEPOSIT} is inserted and confirms NO 'Button_data_invalid' appears in /var/log/supervisor/backend.err.log during the /invoice run. Cancel callback (cxl:<sid>) sets status to CANCELLED (verified via MongoDB). The bridge full-conversation test failure is a test-environment artifact (bridge_start.reply_text fails on fake chat, blocking state transition); it is NOT a regression. To retest bridge flow, either fix bridge_start to swallow send errors, or assert only on conversation entry (state = BR_RECIPIENT_TEXT set) rather than downstream DB writes.",
+  "rca of the issue": "/bridge test failure RCA: python-telegram-bot's ConversationHandler treats a handler that raises before returning a state as ENDing the conversation. bridge_start (bot.py:322) makes reply_text its FIRST action; when the target chat is fake (chat_id=900900900), Telegram returns 'Chat not found', the coroutine raises, and ConversationHandler never persists the BR_RECIPIENT_TEXT state. Subsequent webhook POSTs (Starknet addr, Base addr, amount) fall through with no matching handler, so _save_address and swap-insert never run. Mitigation: wrap reply_text in try/except in bridge_start OR return the state before sending the reply."
+}

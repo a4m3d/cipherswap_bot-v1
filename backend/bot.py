@@ -328,15 +328,21 @@ async def bridge_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sn:
         buttons = [[InlineKeyboardButton(f"📥 {_short(a)}", callback_data=f"sn:{i}")] for i, a in enumerate(sn)]
         buttons.append([InlineKeyboardButton("➕ Enter a new address", callback_data="sn:new")])
-        await update.effective_message.reply_text(
-            "🌉 *New bridge*\n\nWhich *Starknet* address should receive the STRK?",
-            parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(buttons),
-        )
+        try:
+            await update.effective_message.reply_text(
+                "🌉 *New bridge*\n\nWhich *Starknet* address should receive the STRK?",
+                parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        except Exception:
+            logger.exception("bridge_start reply failed")
         return BR_RECIPIENT
-    await update.effective_message.reply_text(
-        "🌉 *New bridge*\n\nSend me your *Starknet* address (0x...) to receive the funds.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    try:
+        await update.effective_message.reply_text(
+            "🌉 *New bridge*\n\nSend me your *Starknet* address (0x...) to receive the funds.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception:
+        logger.exception("bridge_start reply failed")
     return BR_RECIPIENT_TEXT
 
 
