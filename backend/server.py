@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI):
             from telegram import BotCommand
             await application.bot.set_my_commands([
                 BotCommand("bridge", "Start a new Base to Starknet bridge"),
+                BotCommand("invoice", "Create a client payment invoice"),
                 BotCommand("addresses", "Manage your saved addresses"),
                 BotCommand("history", "See your recent bridges"),
                 BotCommand("privacy", "How your privacy is protected"),

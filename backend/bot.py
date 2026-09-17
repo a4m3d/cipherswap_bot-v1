@@ -77,6 +77,100 @@ def _qr_bytes(text: str) -> io.BytesIO:
     return bio
 
 
+async def cmd_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create a shareable client invoice: /invoice 50"""
+    db = _db(context)
+    near = _near(context)
+    chat_id = update.effective_chat.id
+    user = await _get_user(db, chat_id)
+    sn = user.get("starknet", [])
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: `/invoice <amount_usdc>`\nExample: `/invoice 50`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    try:
+        amount = Decimal(context.args[0].replace(",", ""))
+    except (InvalidOperation, ValueError):
+        await update.message.reply_text("⚠️ Invalid amount. Example: /invoice 50")
+        return
+    if amount < MIN_USDC:
+        await update.message.reply_text(f"⚠️ Minimum is {MIN_USDC} USDC.")
+        return
+    if not sn:
+        await update.message.reply_text(
+            "You need a Starknet receiving address first. Run /bridge once to save it."
+        )
+        return
+
+    recipient = sn[0]
+    refund = (user.get("base") or [recipient])[0]
+    try:
+        quote = await near.create_swap(amount, recipient, refund)
+    except Exception as e:
+        logger.exception("invoice quote failed")
+        await update.message.reply_text(f"❌ Couldn't create the invoice: {str(e)[:200]}")
+        return
+
+    deposit = quote["deposit_address"]
+    link = _payment_link(deposit, amount)
+    await db.swaps.insert_one({
+        "chat_id": chat_id,
+        "deposit_address": deposit,
+        "deposit_memo": quote.get("deposit_memo"),
+        "recipient": recipient,
+        "refund": refund,
+        "amount_in": str(amount),
+        "amount_out": quote.get("amount_out_formatted"),
+        "status": "PENDING_DEPOSIT",
+        "is_invoice": True,
+        "correlation_id": quote.get("correlation_id"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    memo_line = f"\nMemo: `{quote['deposit_memo']}`" if quote.get("deposit_memo") else ""
+    await context.bot.send_photo(
+        chat_id,
+        photo=InputFile(_qr_bytes(link)),
+        caption=(
+            f"🧾 *Invoice — {amount} USDC on Base*\n\n"
+            f"Deposit address:\n`{deposit}`{memo_line}\n\n"
+            "Scan the QR — it pre-fills token, network & amount in the wallet.\n"
+            "_Share this card with your client. They pay USDC on Base, it auto-arrives on your Starknet._"
+        ),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Copy address", callback_data=f"cpy:a:{deposit}")],
+            [InlineKeyboardButton("📋 Copy payment link", callback_data=f"cpy:l:{link[:60]}")],
+        ]),
+    )
+    await context.bot.send_message(
+        chat_id,
+        f"Tap to copy the address:\n\n`{deposit}`\n\nPayment link:\n{link}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def cb_copy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer("Copied below — tap to copy again anytime.", show_alert=False)
+
+
+BASE_USDC_CONTRACT = "0x833589FCd6eDb6E08f4c7C32D4f71b54bdA02913"
+BASE_CHAIN_ID = 8453
+
+
+def _payment_link(deposit_address: str, amount: Decimal) -> str:
+    """EIP-681 style URI so mobile wallets pre-fill token, network and amount."""
+    raw = int((amount * (10 ** 6)).to_integral_value())
+    return (
+        f"ethereum:pay-{BASE_USDC_CONTRACT}@{BASE_CHAIN_ID}/transfer"
+        f"?address={deposit_address}&uint256={raw}"
+    )
+
+
 # ---------- basic commands ----------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     near = _near(context)
@@ -87,6 +181,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Tap /bridge to start. Each bridge uses a *brand-new deposit address* for privacy.\n\n"
         "Commands:\n"
         "• /bridge — start a new bridge\n"
+        "• /invoice <amount> — create a client payment invoice\n"
         "• /addresses — manage saved addresses\n"
         "• /history — recent bridges\n"
         "• /privacy — how we protect you\n"
@@ -379,7 +474,20 @@ async def _poller(app: Application):
                     await db.swaps.update_one(
                         {"_id": s["_id"]}, {"$set": {"status": new_status}}
                     )
-                    msg = labels.get(new_status)
+                    is_inv = s.get("is_invoice")
+                    amt = s.get("amount_in")
+                    if is_inv:
+                        msg_map = {
+                            "KNOWN_DEPOSIT_TX": f"💰 Client paid {amt} USDC — bridging to your Starknet now...",
+                            "PROCESSING": f"⏳ Bridging client payment of {amt} USDC...",
+                            "SUCCESS": f"✅ Client payment of {amt} USDC arrived on your Starknet.",
+                            "REFUNDED": f"↩️ Client payment of {amt} USDC was refunded.",
+                            "FAILED": f"❌ Client payment of {amt} USDC failed/refunded.",
+                            "INCOMPLETE_DEPOSIT": f"⚠️ Client partially paid {amt} USDC.",
+                        }
+                        msg = msg_map.get(new_status)
+                    else:
+                        msg = labels.get(new_status)
                     if msg:
                         try:
                             await app.bot.send_message(s["chat_id"], msg)
@@ -436,5 +544,7 @@ def create_application(token: str, db, near: NearBridgeClient) -> Application:
     app.add_handler(CommandHandler("forget", cmd_forget))
     app.add_handler(CommandHandler("addresses", cmd_addresses))
     app.add_handler(CommandHandler("history", cmd_history))
+    app.add_handler(CommandHandler("invoice", cmd_invoice))
+    app.add_handler(CallbackQueryHandler(cb_copy, pattern="^cpy:"))
     app.add_handler(CallbackQueryHandler(cb_delete, pattern="^del:"))
     return app

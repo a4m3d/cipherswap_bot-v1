@@ -24,10 +24,12 @@ User wants a "crypto wallet" that: when USDC is sent on Base, auto-converts it t
 ## Implemented (2026-09-17)
 - ✅ Telegram bot @swaswabotbot live; webhook set; command menu.
 - ✅ /bridge flow: pick/enter Starknet recipient → pick/enter Base refund → amount → live NEAR quote → deposit address + QR + shows USDC in and ~STRK out (+USD value) + ETA.
+- ✅ /invoice <amount>: merchant flow — creates a shareable payment card with EIP-681 QR (pre-fills token, Base network, amount) bound to a fresh deposit address; tap-to-copy address + payment link; client pays USDC on Base, funds auto-arrive on Starknet; invoice-specific alerts ("Client paid X USDC...").
 - ✅ Address saver (per user, Starknet + Base) with /addresses management (delete).
 - ✅ /history recent bridges; background poller (15s) notifies on deposit detected / processing / success / refunded / failed.
 - ✅ /privacy and /forget (data wipe).
 - ✅ Landing page with live bot QR + stats. Verified end-to-end by real user (quote 201, QR delivered, swap persisted 1 USDC → ~33.78 STRK).
+- ✅ /invoice verified via webhook sim with seeded user (5 USDC → ~173.3 STRK, is_invoice row persisted, poller tracking).
 
 ## Backlog / Next
 - P0: Wire Layerswap for true USDC→USDC on Starknet (needs Mainnet API key from user).
