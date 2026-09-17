@@ -1,0 +1,34 @@
+{
+  "summary": "Full regression on the 2-mode rebuild (Classic + Universal). Rewrote backend_test.py for the new schema (users.book dict, deposit_address on swaps, custodial collection). 13/13 pytest passed in 74s. Verified: (1) /api/bot-info returns swaswabotbot, /api/stats returns JSON; (2) Webhook 403 on wrong secret, 200 on correct; (3) /start doesn't create swaps; (4) NL 'bridge 1500 usdc on base to usdt on bsc' -> recipient text -> refund text -> prv:go creates ONE swap doc with src_sym=USDC src_net=base dst_sym=USDT dst_net=bsc amount_in=1500 status=PENDING_DEPOSIT + real deposit_address, AND populates users.book.bsc + users.book.base; (5) Second swap with pre-seeded book uses saved rcp:0/rfd:0 callbacks and creates the swap; (6) Full guided menu (mode:uni -> usn:base -> usc:USDC -> udn:bsc -> udc:USDT -> 1500 -> bl:keep -> recipient -> refund -> prv:go) creates a valid swap; (7) SPLIT multi-address non-custodial (prv:split once) on total 3000 creates >=2 swaps sharing one gid, amounts sum to exactly 3000; cxlp:<gid> then cancels all; (8) Zero-Trace (prv:zt) creates swap with ephemeral=true; cxl:<sid> cancels it; (9) clr:ask -> clr:yes wipes users/swaps/custodial for the chat; (10) Custodial pay-once split (prv:split + prv:style) creates a doc in 'custodial' collection with address (0x...), pk, chunks>=2 summing to 3000; no swap docs created (waits for funding); (11) Under-min amount (5 USDC) is rejected cleanly by NEAR — no swap doc created; no unhandled exceptions in logs. NO-HANG: every flow completes and writes to Mongo despite 'Chat not found' errors on fake chats. Frontend landing page loads (Bot Online, QR, @swaswabotbot handle visible, /api/stats surfaced as 'BRIDGES STARTED').",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Landing page (/)", "issues": ["Marketing copy is stale: still titled 'RelayBridge' and reads 'Send USDC on Base. Get it on Starknet. Automatically.' with 'Base Mainnet -> Starknet Mainnet' pills and 'Four taps' section. The bot is now the 2-mode CipherSwap (Classic + Universal any-coin/any-network via NL), so landing should reflect the new universal capability. Bot Online widget + QR + /api/stats still work."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: refresh /app/frontend landing page copy/branding to reflect the new 2-mode CipherSwap (Classic + Universal). Functionality-wise nothing is broken.",
+    "Consider wrapping the final send in cb_cancel_plan (context.bot.send_message) with _safe_send to match the rest of the codebase (raw send here would raise on transient network failure; would be caught by _on_error but still noisy).",
+    "bot.py _resolve_recipient: rot_idx is read then $inc'd in two separate awaits — under concurrent updates the same idx could be read twice. Use findAndModify/$inc-then-return to make atomic.",
+    "server.py telegram_webhook: no X-Telegram-Bot-Api-Secret-Token header check (only URL secret). Low priority."
+  ],
+  "critical_code_review_comments": [
+    "bot.py: _execute for multi-address split fires all chunk NEAR quotes as a background asyncio.create_task; each quote is ~5-8s so 2-4 chunks can run 15-30s. Good that webhook returns quickly, but if the task raises before scheduling the last chunk, earlier chunks may still be inserted while user thinks it failed. Consider logging task exceptions explicitly and messaging the user on partial failure.",
+    "bot.py cb_privacy 'style' toggle: only switches to 'custodial' if evm.supported(origin_net) AND origin_contract present. Silent no-op otherwise (button label doesn't change). Consider showing a small alert 'Custodial only supported on EVM origins' when toggling on a non-EVM origin.",
+    "bot.py _split_amount: after enforcing SPLIT_MIN and merging tail chunks, the final drift correction runs BEFORE the merge loop; the second correction line after the loop covers it, but the logic is subtle. Add a unit test.",
+    "nlp.py: verb detection uses substring match without word boundary for the 'startswith' path. `send` also matches at the start; 'sending 5 usdc...' would be treated as a command. Minor.",
+    "server.py: no health endpoint that reports bot readiness (state['application'] is not None). /api/bot-info returns username=None until initialization — could 503 explicitly."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% loads; stale copy noted as design issue only"},
+  "seed_data_creation": "Each test class uses a unique chat_id in 900901000-900901009 range and clears users/swaps/custodial in setup/teardown. TestAddressBookReuse and TestClearHistory pre-seed docs to exercise reuse/wipe paths.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Test file is at /app/backend/tests/backend_test.py. Each test class owns one chat_id (avoids xdist loadscope races on conversation state). Use REACT_APP_BACKEND_URL from frontend/.env (backend .env doesn't export it). NEAR min is ~1000 USD equivalent per route/chunk — use 1500 for singles, 3000 for splits. Real NEAR quote takes ~5-10s per chunk; single-swap tests wait up to 25s, split up to 45s. NL entry uses 'bridge <amt> <src_sym> on <src_net> to <dst_sym> on <dst_net>' and skips the amount step. Guided menu goes /start -> mode:uni -> usn:<net> -> usc:<SYM> -> udn:<net> -> udc:<SYM> -> text amount -> bl:keep (if not in CROWD_AMOUNTS) -> recipient text -> refund text -> prv:go. Custodial split requires prv:split (>=1) AND prv:style toggled to custodial AND EVM origin with origin_contract. Fake chats always get 'Chat not found' on send — assert on Mongo, not on Telegram replies."
+}

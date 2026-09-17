@@ -1,3 +1,7 @@
+# CipherSwap (formerly RelayBridge) — Private cross-chain swap Telegram bot
+
+> 2026-09-17 rebuild: /start now has 2 modes — Classic (Base USDC→Starknet STRK) and Universal (any coin, 35 networks, 196 assets via NEAR Intents). Natural-language commands, address book, both split styles (multi-address + custodial pay-once), zero-trace, /clear. Verified 13/13 by testing agent.
+
 # RelayBridge — Base → Starknet Auto-Bridge Telegram Bot
 
 ## Problem Statement

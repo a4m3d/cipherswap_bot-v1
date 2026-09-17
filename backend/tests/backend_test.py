@@ -1,7 +1,8 @@
-"""Backend tests for USDC->Starknet Telegram bridge bot – Privacy Suite.
+"""Backend tests for CipherSwap Telegram bridge bot (2-mode rebuild).
 
-Each test class uses its OWN chat_id so pytest-xdist loadscope parallel workers
-don't race on shared conversation state.
+Drives the bot via webhook POSTs (fake Telegram chats) and asserts against Mongo.
+All bot sends fail with 'Chat not found' but are wrapped, so flow completes.
+Uses amounts >= 1000 (NEAR temp minimum). Each test class uses its own chat_id.
 """
 import os
 import time
@@ -14,9 +15,8 @@ BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 SECRET = "sn_bridge_7f3a9c21e8"
 WEBHOOK = f"{BASE_URL}/api/telegram/webhook/{SECRET}"
 
-SN1 = "0x04d9c8c2f2e6b6d3a4c5b6a7f8e9d0c1b2a3948576f8e9d0c1b2a3d4e5f60718"
-SN2 = "0x05ab00000000000000000000000000000000000000000000000000000000abcd"
-BASE_ADDR = "0x1234567890123456789012345678901234567890"
+RECIPIENT = "0x1111111111111111111111111111111111111111"
+REFUND = "0x2222222222222222222222222222222222222222"
 
 mongo = MongoClient("mongodb://localhost:27017")
 db = mongo["test_database"]
@@ -40,25 +40,16 @@ def _read_log_since(offset):
         return ""
 
 
-def _seed_user(chat_id):
-    db.users.update_one(
-        {"_id": chat_id},
-        {"$set": {"starknet": [SN1, SN2], "base": [BASE_ADDR], "rot_idx": 0}},
-        upsert=True,
-    )
-
-
-def _clear_user(chat_id):
+def _clear_chat(chat_id):
     db.users.delete_one({"_id": chat_id})
     db.swaps.delete_many({"chat_id": chat_id})
+    db.custodial.delete_many({"chat_id": chat_id})
 
 
 class _Driver:
-    """Isolated update-id/msg-id counters per chat_id."""
-
     def __init__(self, chat_id):
         self.chat_id = chat_id
-        self.uid = chat_id * 10  # unique across classes
+        self.uid = chat_id * 10
         self.mid = 0
 
     def _next(self):
@@ -125,95 +116,227 @@ class TestEndpoints:
 
 # ---------- 2. webhook security ----------
 class TestWebhookSecurity:
-    CHAT = 900900801
-
     def test_wrong_secret(self):
-        r = requests.post(f"{BASE_URL}/api/telegram/webhook/nope", json={"update_id": 1}, timeout=15)
+        r = requests.post(
+            f"{BASE_URL}/api/telegram/webhook/nope",
+            json={"update_id": 1}, timeout=15,
+        )
         assert r.status_code == 403
 
     def test_ok_secret(self):
-        d = _Driver(self.CHAT)
+        d = _Driver(900901000)
         r = d.text("hello")
         assert r.status_code == 200
         assert r.json() == {"ok": True}
+        _clear_chat(900901000)
 
 
-# ---------- 3. /invoice removed ----------
-class TestInvoiceRemoved:
-    CHAT = 900900802
-
-    def setup_method(self):
-        _clear_user(self.CHAT)
-        _seed_user(self.CHAT)
+# ---------- 3. /start does not crash ----------
+class TestStartCommand:
+    CHAT = 900901001
 
     def teardown_method(self):
-        _clear_user(self.CHAT)
+        _clear_chat(self.CHAT)
 
-    def test_invoice_command_does_nothing(self):
+    def test_start_returns_ok(self):
         d = _Driver(self.CHAT)
-        r = d.text("/invoice 10", is_command=True)
+        r = d.text("/start", is_command=True)
         assert r.status_code == 200
-        time.sleep(2)
-        inv = db.swaps.find_one({"chat_id": self.CHAT, "is_invoice": True})
-        assert inv is None, f"invoice doc created after removal: {inv}"
-        # Also no swap doc at all (no handler processed the command)
-        any_swap = db.swaps.find_one({"chat_id": self.CHAT})
-        assert any_swap is None, f"unexpected swap after /invoice: {any_swap}"
+        # No swap docs should be created just by /start
+        time.sleep(1.0)
+        assert db.swaps.find_one({"chat_id": self.CHAT}) is None
 
 
-# ---------- 4. Split + rotation (also tests cxlp cancel-plan) ----------
-class TestSplitRotationAndCancelPlan:
-    CHAT = 900900803
+# ---------- 4. NL universal single swap + address book ----------
+class TestNLSingleSwapAndAddressBook:
+    CHAT = 900901002
 
     def setup_method(self):
-        _clear_user(self.CHAT)
-        _seed_user(self.CHAT)
+        _clear_chat(self.CHAT)
 
     def teardown_method(self):
-        _clear_user(self.CHAT)
+        _clear_chat(self.CHAT)
 
-    def test_split_flow_then_cancel_plan(self):
+    def test_nl_bridge_creates_swap_and_saves_book(self):
         d = _Driver(self.CHAT)
         offs = _log_offset()
 
-        assert d.text("/bridge", is_command=True).status_code == 200
+        # NL command prefills route + amount, jumps straight to recipient prompt
+        assert d.text("bridge 1500 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        # Recipient (bsc EVM address)
+        assert d.text(RECIPIENT).status_code == 200
         time.sleep(1.0)
-        assert d.cb("sn:rot").status_code == 200
-        time.sleep(0.8)
-        assert d.cb("bs:0").status_code == 200
-        time.sleep(0.8)
-        assert d.text("50").status_code == 200  # in CROWD_AMOUNTS → skips blend
-        time.sleep(1.2)
-        assert d.cb("prv:split").status_code == 200
-        time.sleep(0.6)
+        # Refund (base EVM address)
+        assert d.text(REFUND).status_code == 200
+        time.sleep(1.0)
+        # Privacy: confirm defaults
         assert d.cb("prv:go").status_code == 200
-        # Wait for real NEAR quotes for each chunk
-        time.sleep(18)
 
-        swaps = list(db.swaps.find({"chat_id": self.CHAT, "status": "PENDING_DEPOSIT"}))
-        assert len(swaps) >= 2, f"expected >=2 split swaps, got {len(swaps)}"
+        # Wait for NEAR quote (real API call)
+        deadline = time.time() + 25
+        swap = None
+        while time.time() < deadline:
+            swap = db.swaps.find_one({"chat_id": self.CHAT})
+            if swap:
+                break
+            time.sleep(1.0)
 
-        gids = {s.get("gid") for s in swaps}
-        assert len(gids) == 1 and None not in gids, f"chunks should share one gid, got {gids}"
-        gid = swaps[0]["gid"]
+        assert swap is not None, "no swap doc created after NL flow"
+        assert swap["src_sym"] == "USDC"
+        assert swap["src_net"] == "base"
+        assert swap["dst_sym"] == "USDT"
+        assert swap["dst_net"] == "bsc"
+        assert swap["amount_in"] == "1500"
+        assert swap["status"] == "PENDING_DEPOSIT"
+        assert swap.get("deposit_address"), "no deposit_address on swap doc"
+        assert swap["recipient"] == RECIPIENT
+        assert swap["refund"] == REFUND
 
-        total = sum(Decimal(s["amount_in"]) for s in swaps)
-        assert total == Decimal("50"), f"chunks sum to {total}, expected 50"
-
-        recips = {s["recipient"] for s in swaps}
-        assert recips.issubset({SN1, SN2}), f"unexpected recipients: {recips}"
-        assert len(recips) >= 2, f"rotation did not spread across addresses: {recips}"
-
+        # Address book saved under book.<net>
         user = db.users.find_one({"_id": self.CHAT})
-        assert (user or {}).get("rot_idx", 0) >= len(swaps)
+        assert user is not None
+        book = user.get("book") or {}
+        assert RECIPIENT in (book.get("bsc") or []), f"recipient not in book.bsc: {book}"
+        assert REFUND in (book.get("base") or []), f"refund not in book.base: {book}"
 
+        # No hangs
         logs = _read_log_since(offs)
         for bad in ("Application shutting down", "unhandled exception"):
             assert bad not in logs, f"found {bad!r} in logs"
 
-        # ---- cxlp: cancel-plan ----
-        r = d.cb(f"cxlp:{gid}")
-        assert r.status_code == 200
+
+# ---------- 5. Address book reuse on 2nd swap ----------
+class TestAddressBookReuse:
+    CHAT = 900901003
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+        # Seed a saved bsc + base address in the book
+        db.users.update_one(
+            {"_id": self.CHAT},
+            {"$set": {"book": {"bsc": [RECIPIENT], "base": [REFUND]}}},
+            upsert=True,
+        )
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_second_swap_uses_saved_addresses(self):
+        d = _Driver(self.CHAT)
+        assert d.text("bridge 1500 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        # Now recipient should be a callback selection (rcp:0 -> saved index 0)
+        assert d.cb("rcp:0").status_code == 200
+        time.sleep(1.0)
+        # Refund also from book
+        assert d.cb("rfd:0").status_code == 200
+        time.sleep(1.0)
+        assert d.cb("prv:go").status_code == 200
+
+        deadline = time.time() + 25
+        swap = None
+        while time.time() < deadline:
+            swap = db.swaps.find_one({"chat_id": self.CHAT})
+            if swap:
+                break
+            time.sleep(1.0)
+        assert swap is not None, "no swap created via saved-addr callback path"
+        assert swap["recipient"] == RECIPIENT
+        assert swap["refund"] == REFUND
+
+
+# ---------- 6. Guided menu flow ----------
+class TestGuidedMenu:
+    CHAT = 900901004
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_menu_universal_flow(self):
+        d = _Driver(self.CHAT)
+        # Enter universal via mode callback
+        assert d.text("/start", is_command=True).status_code == 200
+        time.sleep(0.8)
+        assert d.cb("mode:uni").status_code == 200
+        time.sleep(0.8)
+        assert d.cb("usn:base").status_code == 200
+        time.sleep(0.6)
+        assert d.cb("usc:USDC").status_code == 200
+        time.sleep(0.6)
+        assert d.cb("udn:bsc").status_code == 200
+        time.sleep(0.6)
+        assert d.cb("udc:USDT").status_code == 200
+        time.sleep(0.6)
+        assert d.text("1500").status_code == 200
+        time.sleep(0.8)
+        # 1500 triggers blend suggestion (not in CROWD_AMOUNTS); keep original
+        assert d.cb("bl:keep").status_code == 200
+        time.sleep(0.6)
+        assert d.text(RECIPIENT).status_code == 200
+        time.sleep(0.8)
+        assert d.text(REFUND).status_code == 200
+        time.sleep(0.8)
+        assert d.cb("prv:go").status_code == 200
+
+        deadline = time.time() + 25
+        swap = None
+        while time.time() < deadline:
+            swap = db.swaps.find_one({"chat_id": self.CHAT})
+            if swap:
+                break
+            time.sleep(1.0)
+        assert swap is not None, "menu flow did not create swap"
+        assert swap["src_sym"] == "USDC" and swap["src_net"] == "base"
+        assert swap["dst_sym"] == "USDT" and swap["dst_net"] == "bsc"
+        assert swap["amount_in"] == "1500"
+
+
+# ---------- 7. Split (multi-address, non-custodial) ----------
+class TestSplitMultiAddress:
+    CHAT = 900901005
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_split_creates_multiple_swaps_same_gid(self):
+        d = _Driver(self.CHAT)
+        assert d.text("bridge 3000 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        assert d.text(RECIPIENT).status_code == 200
+        time.sleep(0.8)
+        assert d.text(REFUND).status_code == 200
+        time.sleep(0.8)
+        # Toggle split once (0 -> 1 -> 2-3 chunks). style stays multi. Delays off.
+        assert d.cb("prv:split").status_code == 200
+        time.sleep(0.6)
+        assert d.cb("prv:go").status_code == 200
+
+        # Real NEAR quote per chunk (~8s each) — wait longer
+        deadline = time.time() + 45
+        swaps = []
+        while time.time() < deadline:
+            swaps = list(db.swaps.find({"chat_id": self.CHAT, "status": "PENDING_DEPOSIT"}))
+            if len(swaps) >= 2:
+                break
+            time.sleep(1.5)
+
+        assert len(swaps) >= 2, f"expected >=2 split swaps, got {len(swaps)}"
+        gids = {s.get("gid") for s in swaps}
+        assert len(gids) == 1 and None not in gids, f"chunks should share one gid, got {gids}"
+
+        total = sum(Decimal(s["amount_in"]) for s in swaps)
+        assert total == Decimal("3000"), f"chunks sum to {total}, expected 3000"
+
+        # cxlp: cancel all remaining
+        gid = swaps[0]["gid"]
+        assert d.cb(f"cxlp:{gid}").status_code == 200
         time.sleep(1.5)
         after = list(db.swaps.find({"chat_id": self.CHAT, "gid": gid}))
         assert after
@@ -221,70 +344,137 @@ class TestSplitRotationAndCancelPlan:
             assert s["status"] == "CANCELLED", f"{s['sid']} status={s['status']}"
 
 
-# ---------- 5. Zero-Trace + per-tx cancel ----------
-class TestZeroTraceAndPerTxCancel:
-    CHAT = 900900804
+# ---------- 8. Zero-Trace + per-tx cancel ----------
+class TestZeroTraceAndCancel:
+    CHAT = 900901006
 
     def setup_method(self):
-        _clear_user(self.CHAT)
-        _seed_user(self.CHAT)
+        _clear_chat(self.CHAT)
 
     def teardown_method(self):
-        _clear_user(self.CHAT)
+        _clear_chat(self.CHAT)
 
-    def test_zero_trace_then_cxl_cancel(self):
+    def test_zero_trace_and_cxl(self):
         d = _Driver(self.CHAT)
-        assert d.text("/bridge", is_command=True).status_code == 200
-        time.sleep(1.0)
-        assert d.cb("sn:0").status_code == 200
-        time.sleep(0.6)
-        assert d.cb("bs:0").status_code == 200
-        time.sleep(0.6)
-        assert d.text("50").status_code == 200
-        time.sleep(1.0)
+        assert d.text("bridge 1500 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        assert d.text(RECIPIENT).status_code == 200
+        time.sleep(0.8)
+        assert d.text(REFUND).status_code == 200
+        time.sleep(0.8)
         assert d.cb("prv:zt").status_code == 200
         time.sleep(0.5)
         assert d.cb("prv:go").status_code == 200
-        time.sleep(12)
 
-        zt = db.swaps.find_one({"chat_id": self.CHAT, "ephemeral": True})
+        deadline = time.time() + 25
+        zt = None
+        while time.time() < deadline:
+            zt = db.swaps.find_one({"chat_id": self.CHAT, "ephemeral": True})
+            if zt:
+                break
+            time.sleep(1.0)
         assert zt is not None, "no ephemeral swap created"
-        assert zt.get("status") == "PENDING_DEPOSIT"
+        assert zt["status"] == "PENDING_DEPOSIT"
 
-        # per-tx cancel
-        r = d.cb(f"cxl:{zt['sid']}")
-        assert r.status_code == 200
+        # Per-tx cancel
+        assert d.cb(f"cxl:{zt['sid']}").status_code == 200
         time.sleep(1.5)
         updated = db.swaps.find_one({"sid": zt["sid"]})
         assert updated["status"] == "CANCELLED"
 
 
-# ---------- 6. Blend-In on odd amount ----------
-class TestBlendIn:
-    CHAT = 900900805
+# ---------- 9. Clear history ----------
+class TestClearHistory:
+    CHAT = 900901007
 
     def setup_method(self):
-        _clear_user(self.CHAT)
-        _seed_user(self.CHAT)
+        _clear_chat(self.CHAT)
+        db.users.insert_one({"_id": self.CHAT, "book": {"bsc": [RECIPIENT]}})
+        db.swaps.insert_one({
+            "sid": "seedxx", "chat_id": self.CHAT, "status": "PENDING_DEPOSIT",
+            "src_sym": "USDC", "src_net": "base", "dst_sym": "USDT", "dst_net": "bsc",
+            "amount_in": "1500",
+        })
+        db.custodial.insert_one({"chat_id": self.CHAT, "dispatched": False, "address": "0xdead"})
 
     def teardown_method(self):
-        _clear_user(self.CHAT)
+        _clear_chat(self.CHAT)
 
-    def test_odd_amount_blend_keep(self):
+    def test_clear_history_deletes_all_user_docs(self):
         d = _Driver(self.CHAT)
-        assert d.text("/bridge", is_command=True).status_code == 200
-        time.sleep(1.0)
-        assert d.cb("sn:0").status_code == 200
+        assert d.cb("clr:ask").status_code == 200
         time.sleep(0.5)
-        assert d.cb("bs:0").status_code == 200
-        time.sleep(0.5)
-        assert d.text("37").status_code == 200  # not in CROWD_AMOUNTS → BR_BLEND
+        assert d.cb("clr:yes").status_code == 200
         time.sleep(1.0)
-        assert d.cb("bl:keep").status_code == 200
+        assert db.users.find_one({"_id": self.CHAT}) is None
+        assert db.swaps.find_one({"chat_id": self.CHAT}) is None
+        assert db.custodial.find_one({"chat_id": self.CHAT}) is None
+
+
+# ---------- 10. Custodial pay-once split creates a custodial doc ----------
+class TestCustodialSplit:
+    CHAT = 900901008
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_custodial_doc_created(self):
+        d = _Driver(self.CHAT)
+        assert d.text("bridge 3000 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        assert d.text(RECIPIENT).status_code == 200
+        time.sleep(0.8)
+        assert d.text(REFUND).status_code == 200
+        time.sleep(0.8)
+        # split -> 1 (multi 2-3), style -> custodial
+        assert d.cb("prv:split").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("prv:style").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("prv:go").status_code == 200
+        time.sleep(3.0)
+
+        cust = db.custodial.find_one({"chat_id": self.CHAT})
+        assert cust is not None, "no custodial doc created"
+        assert cust.get("address", "").startswith("0x")
+        assert "pk" in cust and cust["pk"]
+        chunks = cust.get("chunks") or []
+        assert len(chunks) >= 2, f"expected >=2 chunks, got {chunks}"
+        total = sum(Decimal(c) for c in chunks)
+        assert total == Decimal("3000"), f"chunks sum={total}"
+        # Ensure no swap docs were created for this chat (custodial waits for funding)
+        assert db.swaps.find_one({"chat_id": self.CHAT}) is None
+
+
+# ---------- 11. Under-min amount returns clean error, no swap ----------
+class TestUnderMinAmount:
+    CHAT = 900901009
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_small_amount_no_swap_created(self):
+        d = _Driver(self.CHAT)
+        offs = _log_offset()
+        assert d.text("bridge 5 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        assert d.text(RECIPIENT).status_code == 200
+        time.sleep(0.8)
+        assert d.text(REFUND).status_code == 200
         time.sleep(0.8)
         assert d.cb("prv:go").status_code == 200
         time.sleep(12)
 
-        s = db.swaps.find_one({"chat_id": self.CHAT, "amount_in": "37"})
-        assert s is not None, "blend-keep did not create swap with amount 37"
-        assert s["status"] == "PENDING_DEPOSIT"
+        # No swap doc created since NEAR rejects with min-amount error
+        swap = db.swaps.find_one({"chat_id": self.CHAT})
+        assert swap is None, f"swap unexpectedly created for under-min amount: {swap}"
+
+        logs = _read_log_since(offs)
+        for bad in ("Application shutting down", "unhandled exception"):
+            assert bad not in logs, f"found {bad!r} in logs"

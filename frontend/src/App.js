@@ -112,7 +112,7 @@ function App() {
           <span className="brand-mark">
             <ArrowRightLeft size={18} strokeWidth={2.5} />
           </span>
-          <span className="brand-name">RelayBridge</span>
+          <span className="brand-name">CipherSwap</span>
         </div>
         <a
           href={botLink}
@@ -129,23 +129,23 @@ function App() {
       <header className="hero">
         <motion.div className="hero-left" initial="hidden" animate="show">
           <motion.div variants={fade} custom={0} className="pill-row">
-            <span className="pill pill-base">Base Mainnet</span>
+            <span className="pill pill-base">35 Networks</span>
             <ArrowRightLeft size={13} className="pill-arrow" />
-            <span className="pill pill-star">Starknet Mainnet</span>
+            <span className="pill pill-star">196 Assets</span>
           </motion.div>
 
           <motion.h1 variants={fade} custom={1} className="hero-title">
-            Send <span className="c-usdc">USDC on Base</span>.
+            Swap <span className="c-usdc">any coin</span>,
             <br />
-            Get it on <span className="c-star">Starknet</span>.
+            across <span className="c-star">any chain</span>.
             <br />
-            Automatically.
+            Privately.
           </motion.h1>
 
           <motion.p variants={fade} custom={2} className="hero-sub">
-            A privacy-first Telegram bot that bridges your funds cross-chain with a
-            fresh single-use address every time. No website logins, no seed phrases —
-            just chat, deposit, done.
+            A privacy-first Telegram bot for cross-chain swaps across 35 networks. Just
+            type <em>"swap 5 USDC on base to USDT on bsc"</em> — with fresh addresses,
+            amount-blending, splitting and zero-trace mode built in.
           </motion.p>
 
           <motion.div variants={fade} custom={3} className="hero-actions">
@@ -300,7 +300,7 @@ function App() {
       </section>
 
       <footer className="footer">
-        <span>RelayBridge · Base → Starknet</span>
+        <span>CipherSwap · Any coin, any chain</span>
         <span className="footer-muted">Powered by NEAR Intents · Non-custodial</span>
       </footer>
     </div>
