@@ -1,0 +1,30 @@
+{
+  "summary": "Full backend privacy-suite regression via webhook + Mongo assertions. 8/8 pytest passed in 71s. Verified: (1) /invoice removed (no is_invoice docs, no swap docs created for /invoice command); (2) Blend-In prompt triggers on odd amount 37 and bl:keep confirms exact amount; (3) SPLIT creates >=2 swaps sharing one gid, amounts sum to 50, status PENDING_DEPOSIT; (4) ROTATION spreads chunks across distinct recipients (SN1 & SN2), users.rot_idx increments; (5) ZERO-TRACE (prv:zt) creates swap with ephemeral=true; (6) cxlp:<gid> sets all group swaps to CANCELLED; (7) cxl:<sid> cancels single swap; (8) NO-HANG: full flow completes and writes to Mongo despite 'Chat not found' errors on fake chat (all sends wrapped). Endpoints /api/bot-info returns swaswabotbot, /api/stats returns JSON, landing page loads with bot handle + QR + 'Bot Online'. No 'Application shutting down' / 'unhandled exception' markers in backend logs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "bot.py _split_amount: after enforcing SPLIT_MIN and merging tail chunks, the final sum can drift by 0.01 if merging happens; current test passes with total==50 but for other totals the last-chunk correction happens BEFORE the merge loop, so post-merge the sum may not equal `total`. Consider re-running the diff-correction after the merge.",
+    "bot.py cb_cancel_plan sends context.bot.send_message WITHOUT the _safe_send wrapper — a real network failure here would raise an unhandled exception in the handler (would be caught by _on_error but produces a Traceback in logs). Wrap in try/except like other sends.",
+    "bot.py _execute_plan: when Delays=0 and Split>0, all chunks are created inline sequentially with real NEAR API calls; each call is ~5-8s so 3-4 chunks could take 20-30s inside a single webhook request. FastAPI/webhook has no ack until this returns — Telegram will retry the update if it exceeds its own timeout. Consider offloading chunk creation to a background task and returning 200 immediately.",
+    "server.py telegram_webhook: still no X-Telegram-Bot-Api-Secret-Token header check (URL secret only). Low priority.",
+    "bot.py _resolve_recipient: rot_idx is read AND incremented per chunk with separate awaits — under concurrent updates for the same user, two coroutines could read the same idx before either writes. Rare in single-user flow but worth an atomic $inc via findAndModify."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (landing OK, bot handle + QR visible)"},
+  "seed_data_creation": "Each test class uses its own chat_id (900900801-805) and seeds/tears down users+swaps in setup_method/teardown_method. No shared state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Test file at /app/backend/tests/backend_test.py uses per-class chat_ids to avoid xdist loadscope parallel-worker collisions on shared conversation state. If you add tests, keep the same pattern: each class gets its own CHAT constant + setup_method that clears+seeds. Real NEAR quotes are called during split (3-4 chunks × ~5-8s) so allow >=15s sleep after prv:go. Delays MUST stay off (do not toggle prv:delay) or split chunks land in the JobQueue for the future and won't appear in Mongo immediately. Blend-In only triggers when amount is NOT in {5,10,25,50,100,250,500,1000}."
+}

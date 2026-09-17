@@ -534,6 +534,8 @@ def _split_amount(total: Decimal, n: int):
     while len(chunks) > 1 and chunks[-1] < SPLIT_MIN:
         merged = chunks.pop()
         chunks[-1] = (chunks[-1] + merged).quantize(Decimal("0.01"))
+    fix = (total - sum(chunks)).quantize(Decimal("0.01"))
+    chunks[-1] = (chunks[-1] + fix).quantize(Decimal("0.01"))
     return chunks
 
 
@@ -627,8 +629,8 @@ async def _execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Cancel remaining plan", callback_data=f"cxlp:{gid}")]]),
     )
 
-    await _create_and_send(context.bot, db, chat_id, chunks[0], recipients[0], refund, near,
-                           gid=gid, ephemeral=ephemeral, label=(1, len(chunks)))
+    bot = context.bot
+    immediate = [(chunks[0], recipients[0], 1)]
     cum = 0
     for i, (c, rec) in enumerate(zip(chunks[1:], recipients[1:]), start=2):
         if delay_max:
@@ -639,8 +641,14 @@ async def _execute_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       "ephemeral": ephemeral, "gid": gid, "idx": i, "total": len(chunks)},
             )
         else:
-            await _create_and_send(context.bot, db, chat_id, c, rec, refund, near,
-                                   gid=gid, ephemeral=ephemeral, label=(i, len(chunks)))
+            immediate.append((c, rec, i))
+
+    async def _bg():
+        for c, rec, idx in immediate:
+            await _create_and_send(bot, db, chat_id, c, rec, refund, near,
+                                   gid=gid, ephemeral=ephemeral, label=(idx, len(chunks)))
+
+    asyncio.create_task(_bg())
     ud.clear()
     return ConversationHandler.END
 
@@ -661,8 +669,8 @@ async def cb_cancel_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await context.bot.send_message(
-        q.message.chat.id,
+    await _safe_send(
+        context.bot, q.message.chat.id,
         "✖️ Remaining chunks cancelled. Any chunk you already sent will still complete normally.",
     )
 

@@ -34,7 +34,17 @@ User wants a "crypto wallet" that: when USDC is sent on Base, auto-converts it t
 ## Backlog / Next
 - P0: Wire Layerswap for true USDC→USDC on Starknet (needs Mainnet API key from user).
 
-## Fixes / Hardening (2026-09-17)
+## Privacy Suite + Invoice Removal (2026-09-17)
+- ❌ Removed the /invoice feature entirely (command, handlers, help, poller branch).
+- ✅ Added in-flow **Privacy options** selector inside /bridge (tap-to-toggle, then Confirm):
+  - 🫥 **Blend-In Amounts** — suggests rounding to crowd amounts (5/10/25/50/100/250/500/1000).
+  - 🎲 **Rotate receiving wallet** — auto-rotates across the user's saved Starknet addresses (per bridge and per split-chunk); tracked via users.rot_idx.
+  - 🔀 **Split** — off / 2–3 / 3–4 random chunks (each a fresh deposit address); non-custodial.
+  - ⏱ **Delays** — off / ≤5m / ≤30m; when on, chunks are scheduled via JobQueue and the bot pings when to send the next.
+  - 🕵️ **Zero-Trace** — swap stored with ephemeral=true; record auto-deletes on terminal status in the poller.
+- ✅ **Cancel remaining plan** button (cxlp:<gid>) cancels all pending chunks in a split group and removes scheduled jobs; per-tx Cancel (cxl:<sid>) retained.
+- ✅ Robustness/no-hang: ALL Telegram sends/acks/edits wrapped (_ack, _safe_edit, _safe_send, _safe_reply, _send_deposit_card fallback) so a failed/stale Telegram call can never abort a conversation; conversation_timeout=300s.
+- Verified E2E via webhook + Mongo: split (2 chunks sum=total), rotation (distinct recipients), blend applied, zero-trace ephemeral, cancel-plan → CANCELLED, single bridge.
 - 🐞 FIXED `/invoice`: inline-button callback_data held full address/link (>64B) → Telegram `Button_data_invalid` → card never sent. Now uses short `cxl:<sid>` (12B). Verified by testing_agent (no Button_data_invalid; invoice row with sid/is_invoice persists).
 - ✅ Added **Cancel transaction** button on every /bridge and /invoice card (`cxl:<sid>` → sets swap status CANCELLED; poller stops tracking; blocks if deposit already detected). Verified.
 - ✅ Robustness (no-hang): global error handler messages the user; `_send_deposit_card` falls back to text if photo send fails; ConversationHandler `conversation_timeout=300s` with TIMEOUT handler; friendly timeout/min-amount error messages; bridge_start send wrapped so state always advances; httpx token logging disabled.
