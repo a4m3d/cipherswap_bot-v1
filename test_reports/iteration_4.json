@@ -1,0 +1,48 @@
+{
+  "summary": "Testing of the new single-wizard rebuild (edit-in-place, Back nav, favorites, repeat/reverse, requote, menu:open recovery). Updated /app/backend/tests/backend_test.py from the prior 2-mode build (mode:uni -> start:uni) and ADDED 8 new tests for BACK navigation, menu:open auto-recovery, NL ambiguity, amt:* presets, savefav+fav:0, rpt/rev, rq re-quote, and near_client.get_status tx-hash parsing (unit test with monkeypatched _request). 23 tests total: 17 PASSED, 6 FAILED. Root cause of the 6 failures is a single CRITICAL bug in the ConversationHandler wiring (see below). Once the entry_point/allow_reentry issue is fixed, all 6 failing cases will pass because their same mechanics succeed via the callback path (TestAddressBookReuse using rcp:0/rfd:0 PASSES with the same route + amount).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "bot.py::create_application (ConversationHandler)",
+        "issue": "CRITICAL: allow_reentry=True + MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text) registered as an entry_point causes every subsequent text message inside the conversation to re-hit nl_text instead of the current state's MessageHandler. Practical effect: user cannot type a recipient/refund address by text — the wizard is silently reset and no swap is ever created. Verified by instrumenting nl_text and recipient_text with a temporary log line: for a NL flow `bridge 1500 usdc on base to usdt on bsc` -> `<addr>` -> `<addr>` -> prv:go, logs showed nl_text fired THREE times (for the NL command AND both address strings), and recipient_text was NEVER called. In PTB, when allow_reentry=True, entry_points are re-checked on every update and take precedence — so a catch-all text entry_point cannibalises US_RECIPIENT_TEXT / US_REFUND_TEXT / US_AMOUNT text handlers. This is why 6/6 text-based tests fail (NL single, guided menu with typed amount+recipient+refund, ZT+cxl, split multi-address, custodial split, rq re-quote initial creation) while the callback-only path (TestAddressBookReuse with rcp:0/rfd:0) succeeds. Suggested fixes: (a) remove allow_reentry=True (keep re-entry via explicit /start or start:uni CallbackQuery entry_points), OR (b) gate the text entry_point with a filter that only matches strings containing a swap verb (e.g. Regex(r'^\\s*(swap|bridge|convert|exchange)\\b')), OR (c) inside nl_text return the current conversation state instead of None when parse fails so PTB doesn't consume the update.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "bot.py::_execute (split, non-custodial)",
+        "issue": "For amount=3000 with split -> 2-3 chunks, each chunk ~1000-1500 USDC. NEAR API has enforced a live 'minimum swap amount is $1,000' limit on some routes, so tail chunks of 1000-1200 mostly succeed but tighter splits may occasionally fall below and be rejected per-chunk. This is provider-side and shows up cleanly (`❌ Couldn't create a deposit ...`), not a bug per se, but tests should use larger totals (e.g. 4500-6000) to stay safely above."
+      },
+      {
+        "endpoint": "server.py::telegram_webhook",
+        "issue": "No X-Telegram-Bot-Api-Secret-Token header check (only URL secret). Low priority."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix the ConversationHandler wiring in bot.py::create_application so state MessageHandlers (recipient_text, refund_text, amount_text) actually run. Simplest fix: remove `allow_reentry=True` (users still re-enter via /start or the 'start:uni' / 'menu:open' callbacks which are their own entry_points and explicitly reset context.user_data). Alternatively, gate the nl_text entry_point with a Regex filter that requires a verb keyword.",
+    "After the fix, re-run: pytest /app/backend/tests/backend_test.py -v — all 23 should pass (the 6 currently failing tests exercise the exact text paths that the bug breaks).",
+    "Consider using amounts >= 4500 for split totals to stay above the NEAR $1000-per-chunk temporary minimum for USDC->USDT base->bsc.",
+    "Optional: _resolve_recipient reads rot_idx then $inc's in two awaits — race under concurrent updates. Use findAndModify or a single $inc that returns the new value."
+  ],
+  "critical_code_review_comments": [
+    "bot.py ConversationHandler: allow_reentry=True + broad TEXT entry_point is the root bug. This combination is a well-known PTB footgun.",
+    "bot.py::nl_text returns None on non-command text. Combined with allow_reentry=True, this still starts (then immediately ends) a re-entry, effectively swallowing the update from state handlers.",
+    "bot.py file is 1339 lines — should be split into modules (menu/, flow/, notify/, custodial/, callbacks/).",
+    "bot.py::_split_amount tail-merging logic runs a drift correction before AND after the merge-tail loop; subtle. Add unit tests.",
+    "near_client.get_status: good — new swapDetails.originChainTxHashes / destinationChainTxHashes parsing works exactly as spec'd (verified by two unit tests with monkeypatched _request: success payload + missing-hashes payload)."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "74% (17/23)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "Webhook secret sn_bridge_7f3a9c21e8 (from .env). No user auth.",
+  "seed_data_creation": "Each test class uses a unique chat_id in 900901000-900901016 range and clears users/swaps/custodial in setup/teardown. TestFavorites and TestRepeatReverse pre-seed a SUCCESS swap doc with a full route so savefav/rpt/rev have data to operate on. TestAddressBookReuse pre-seeds a book with saved bsc + base addresses.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "backend_test.py has 23 tests, 8 of them NEW: TestBackNavigation, TestMenuOpenRecovery, TestNLAmbiguous, TestAmountPreset, TestFavorites, TestRepeatReverse (2 tests), TestRequote, TestGetStatusTxHashes (2 tests). All 6 current failures collapse to a single root cause — the ConversationHandler entry_point / allow_reentry bug documented in backend_issues.critical. The failure mode is 100% reproducible: instrument nl_text and any state MessageHandler with a log line, run TestNLSingleSwapAndAddressBook alone, observe nl_text fires 3x and recipient_text never fires. Once main agent fixes the wiring, the 6 tests should pass without any further test-side changes. The unit tests for get_status tx-hash parsing (TestGetStatusTxHashes) pass and confirm the parsing spec.",
+  "rca of the issue": "ROOT CAUSE: In /app/backend/bot.py::create_application, the ConversationHandler is constructed with `allow_reentry=True` AND registers `MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text)` as an entry_point. In python-telegram-bot, when allow_reentry=True, entry_point handlers are re-checked on every incoming update, and if a matching entry_point exists it fires INSTEAD of the current state's handler. Because the nl_text entry_point matches ALL non-command text, the state MessageHandlers (recipient_text at US_RECIPIENT_TEXT, refund_text at US_REFUND_TEXT, amount_text at US_AMOUNT) are dead code for text updates — nl_text gets the update, sees no swap verb, returns None, and the conversation silently ends. REPRODUCTION: (1) POST NL update `bridge 1500 usdc on base to usdt on bsc`; nl_text fires, sets US_RECIPIENT_TEXT. (2) POST address text `0x1111...`; nl_text fires AGAIN instead of recipient_text; no addr saved, conversation reset. (3) POST address text `0x2222...`; nl_text fires AGAIN. (4) POST callback prv:go; no active US_PRIVACY state — nothing happens. No swap doc is ever inserted. MITIGATION: Change `allow_reentry=True` to False (simplest) OR replace the entry_point filter with a verb-only regex: `MessageHandler(filters.Regex(r'^\\s*(swap|bridge|convert|exchange|send)\\b'), nl_text)`. Users can still restart via /start, start:uni, start:classic, fav:*, rpt:*, rev:*, menu:open, all of which are their own entry_points."
+}

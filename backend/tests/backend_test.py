@@ -258,10 +258,10 @@ class TestGuidedMenu:
 
     def test_menu_universal_flow(self):
         d = _Driver(self.CHAT)
-        # Enter universal via mode callback
+        # Enter universal via start callback
         assert d.text("/start", is_command=True).status_code == 200
         time.sleep(0.8)
-        assert d.cb("mode:uni").status_code == 200
+        assert d.cb("start:uni").status_code == 200
         time.sleep(0.8)
         assert d.cb("usn:base").status_code == 200
         time.sleep(0.6)
@@ -478,3 +478,317 @@ class TestUnderMinAmount:
         logs = _read_log_since(offs)
         for bad in ("Application shutting down", "unhandled exception"):
             assert bad not in logs, f"found {bad!r} in logs"
+
+
+# ---------- 12. Back navigation (nav:*) ----------
+class TestBackNavigation:
+    CHAT = 900901010
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_back_from_src_coin_to_src_net(self):
+        d = _Driver(self.CHAT)
+        assert d.text("/start", is_command=True).status_code == 200
+        time.sleep(0.6)
+        assert d.cb("start:uni").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("usn:base").status_code == 200  # -> src_coin
+        time.sleep(0.4)
+        # Back to source-network
+        assert d.cb("nav:srcnet").status_code == 200
+        time.sleep(0.4)
+        # Should still be in conversation — pick another src net
+        assert d.cb("usn:eth").status_code == 200
+        time.sleep(0.4)
+        # And a coin to keep advancing (this asserts state didn't blow up)
+        r = d.cb("usc:USDC")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+
+
+# ---------- 13. menu:open auto-recovery ----------
+class TestMenuOpenRecovery:
+    CHAT = 900901011
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_menu_open_resets_conversation(self):
+        d = _Driver(self.CHAT)
+        assert d.text("/start", is_command=True).status_code == 200
+        time.sleep(0.5)
+        assert d.cb("start:uni").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("usn:base").status_code == 200
+        time.sleep(0.4)
+        # Auto-recovery: tap Continue → resets and reopens menu
+        r = d.cb("menu:open")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        time.sleep(0.4)
+        # And we can start a fresh flow again
+        assert d.cb("start:uni").status_code == 200
+
+
+# ---------- 14. NL ambiguous (no networks) ----------
+class TestNLAmbiguous:
+    CHAT = 900901012
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_ambiguous_returns_clarification_no_swap(self):
+        d = _Driver(self.CHAT)
+        offs = _log_offset()
+        # USDC/USDT both exist on many chains -> ambiguous
+        r = d.text("swap 5 USDC to USDT")
+        assert r.status_code == 200
+        time.sleep(2.0)
+        # Nothing should be created
+        assert db.swaps.find_one({"chat_id": self.CHAT}) is None
+        # And no unhandled exception
+        logs = _read_log_since(offs)
+        for bad in ("Application shutting down", "unhandled exception"):
+            assert bad not in logs
+
+
+# ---------- 15. Amount preset via amt:* ----------
+class TestAmountPreset:
+    CHAT = 900901013
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_amt_preset_advances(self):
+        """A crowd amount (100) via amt:* preset skips blend and goes to recipient."""
+        d = _Driver(self.CHAT)
+        assert d.cb("start:uni").status_code == 200  # entry_point works without /start
+        time.sleep(0.4)
+        assert d.cb("usn:base").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("usc:USDC").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("udn:bsc").status_code == 200
+        time.sleep(0.4)
+        assert d.cb("udc:USDT").status_code == 200
+        time.sleep(0.4)
+        # Preset 100 is a CROWD amount -> should NOT show blend, jumps to recipient
+        r = d.cb("amt:100")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        time.sleep(0.4)
+        # Recipient text should now be accepted (proves we advanced past amount+blend)
+        r2 = d.text(RECIPIENT)
+        assert r2.status_code == 200
+
+
+# ---------- 16. Favorites: savefav + fav:0 ----------
+class TestFavorites:
+    CHAT = 900901014
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+        # Seed a completed swap doc so savefav can find a route
+        db.swaps.insert_one({
+            "sid": "favseed",
+            "chat_id": self.CHAT,
+            "status": "SUCCESS",
+            "src_sym": "USDC", "src_net": "base",
+            "dst_sym": "USDT", "dst_net": "bsc",
+            "amount_in": "1500",
+            "route": {
+                "origin_net": "base", "src_sym": "USDC",
+                "origin_asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+                "origin_decimals": 6,
+                "origin_contract": "0x833589FCd6eDb6E08f4c7C32D4f71b54bdA02913",
+                "dest_net": "bsc", "dst_sym": "USDT",
+                "dest_asset": "nep141:bsc-0x55d398326f99059ff775485246999027b3197955.omft.near",
+            },
+        })
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_savefav_then_fav_starts_prefilled_flow(self):
+        d = _Driver(self.CHAT)
+        # Save favorite from the seeded sid
+        assert d.cb("savefav:favseed").status_code == 200
+        time.sleep(0.8)
+        user = db.users.find_one({"_id": self.CHAT})
+        assert user is not None
+        favs = user.get("favorites") or []
+        assert len(favs) == 1
+        assert favs[0]["route"]["src_sym"] == "USDC"
+        assert favs[0]["route"]["origin_net"] == "base"
+        assert favs[0]["route"]["dst_sym"] == "USDT"
+        assert favs[0]["route"]["dest_net"] == "bsc"
+
+        # Now tap fav:0 - should start pre-filled flow (advances to amount)
+        r = d.cb("fav:0")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        time.sleep(0.4)
+        # Typing an amount should be accepted at amount step
+        assert d.text("1500").status_code == 200
+
+
+# ---------- 17. Repeat / Reverse from finished swap ----------
+class TestRepeatReverse:
+    CHAT = 900901015
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+        db.swaps.insert_one({
+            "sid": "rptseed",
+            "chat_id": self.CHAT,
+            "status": "SUCCESS",
+            "src_sym": "USDC", "src_net": "base",
+            "dst_sym": "USDT", "dst_net": "bsc",
+            "amount_in": "1500",
+            "route": {
+                "origin_net": "base", "src_sym": "USDC",
+                "origin_asset": "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near",
+                "origin_decimals": 6,
+                "origin_contract": "0x833589FCd6eDb6E08f4c7C32D4f71b54bdA02913",
+                "dest_net": "bsc", "dst_sym": "USDT",
+                "dest_asset": "nep141:bsc-0x55d398326f99059ff775485246999027b3197955.omft.near",
+            },
+        })
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_rpt_starts_flow(self):
+        d = _Driver(self.CHAT)
+        r = d.cb("rpt:rptseed")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        time.sleep(0.4)
+        # Amount step should accept a number
+        assert d.text("1500").status_code == 200
+
+    def test_rev_starts_flow(self):
+        d = _Driver(self.CHAT)
+        r = d.cb("rev:rptseed")
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        time.sleep(0.4)
+        # Amount step should accept a number
+        assert d.text("1500").status_code == 200
+
+
+# ---------- 18. Re-quote on expiry (rq:*) ----------
+class TestRequote:
+    CHAT = 900901016
+
+    def setup_method(self):
+        _clear_chat(self.CHAT)
+
+    def teardown_method(self):
+        _clear_chat(self.CHAT)
+
+    def test_rq_cancels_old_creates_new(self):
+        # First create a real swap via NL
+        d = _Driver(self.CHAT)
+        assert d.text("bridge 1500 usdc on base to usdt on bsc").status_code == 200
+        time.sleep(1.5)
+        assert d.text(RECIPIENT).status_code == 200
+        time.sleep(0.8)
+        assert d.text(REFUND).status_code == 200
+        time.sleep(0.8)
+        assert d.cb("prv:go").status_code == 200
+
+        deadline = time.time() + 25
+        old = None
+        while time.time() < deadline:
+            old = db.swaps.find_one({"chat_id": self.CHAT, "status": "PENDING_DEPOSIT"})
+            if old:
+                break
+            time.sleep(1.0)
+        assert old is not None, "no original swap created"
+        old_sid = old["sid"]
+
+        # Re-quote
+        assert d.cb(f"rq:{old_sid}").status_code == 200
+        # Wait for old to be cancelled + new to appear
+        deadline = time.time() + 25
+        new_swap = None
+        while time.time() < deadline:
+            after_old = db.swaps.find_one({"sid": old_sid})
+            new_swap = db.swaps.find_one(
+                {"chat_id": self.CHAT, "status": "PENDING_DEPOSIT",
+                 "sid": {"$ne": old_sid}})
+            if after_old and after_old.get("status") == "CANCELLED" and new_swap:
+                break
+            time.sleep(1.0)
+        after_old = db.swaps.find_one({"sid": old_sid})
+        assert after_old["status"] == "CANCELLED"
+        assert new_swap is not None, "no fresh swap after re-quote"
+        assert new_swap["amount_in"] == "1500"
+        assert new_swap["recipient"] == RECIPIENT
+        assert new_swap["refund"] == REFUND
+        assert new_swap.get("deposit_address")
+
+
+# ---------- 19. near_client.get_status tx-hash parsing (unit) ----------
+class TestGetStatusTxHashes:
+    def test_parses_swap_details_tx_hashes(self, monkeypatch):
+        import asyncio
+        from near_client import NearBridgeClient
+
+        canned = {
+            "status": "SUCCESS",
+            "swapDetails": {
+                "amountOutFormatted": "1499.10",
+                "amountOutUsd": "1499.10",
+                "originChainTxHashes": [
+                    {"hash": "0xabc123", "explorerUrl": "https://basescan.org/tx/0xabc123"}
+                ],
+                "destinationChainTxHashes": [
+                    {"hash": "0xdef456", "explorerUrl": "https://bscscan.com/tx/0xdef456"}
+                ],
+                "refundReason": None,
+            },
+            "refundReason": None,
+        }
+
+        async def fake_request(self, method, path, **kw):
+            assert method == "GET" and path == "/v0/status"
+            return canned
+
+        monkeypatch.setattr(NearBridgeClient, "_request", fake_request)
+        client = NearBridgeClient()
+        res = asyncio.get_event_loop().run_until_complete(
+            client.get_status("0xdeposit", None))
+        assert res["status"] == "SUCCESS"
+        assert res["origin_tx"] == "0xabc123"
+        assert res["origin_tx_url"] == "https://basescan.org/tx/0xabc123"
+        assert res["dest_tx"] == "0xdef456"
+        assert res["dest_tx_url"] == "https://bscscan.com/tx/0xdef456"
+        assert res["amount_out_formatted"] == "1499.10"
+        assert res["refund_reason"] is None
+
+    def test_missing_tx_hashes_return_none(self, monkeypatch):
+        import asyncio
+        from near_client import NearBridgeClient
+
+        canned = {"status": "PROCESSING", "swapDetails": {}}
+
+        async def fake_request(self, method, path, **kw):
+            return canned
+
+        monkeypatch.setattr(NearBridgeClient, "_request", fake_request)
+        client = NearBridgeClient()
+        res = asyncio.get_event_loop().run_until_complete(
+            client.get_status("0xdeposit", None))
+        assert res["status"] == "PROCESSING"
+        assert res["origin_tx"] is None and res["origin_tx_url"] is None
+        assert res["dest_tx"] is None and res["dest_tx_url"] is None
+

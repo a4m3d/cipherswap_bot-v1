@@ -1295,7 +1295,7 @@ def create_application(token, db, near: NearBridgeClient) -> Application:
             CallbackQueryHandler(cb_repeat, pattern="^rpt:"),
             CallbackQueryHandler(cb_reverse, pattern="^rev:"),
             CommandHandler("swap", cmd_swap),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, nl_text),
+            MessageHandler(filters.Regex(r"(?i)\b(swap|bridge|convert|exchange|send)\b") & ~filters.COMMAND, nl_text),
         ],
         states={
             US_SRC_NET: [CallbackQueryHandler(cb_src_net, pattern="^usn:"), nav],

@@ -60,3 +60,17 @@ User wants a "crypto wallet" that: when USDC is sent on Base, auto-converts it t
 
 ## Notes
 - MOCKED: nothing is mocked. Real mainnet NEAR Intents route. Users must send real USDC on Base; funds are real.
+
+## Update — 2026-06 (Pro UX rebuild: single-wizard nav, notifications, auto-recovery)
+User asks addressed: tx hashes after transfer, timely notifications, never-get-stuck auto-recovery, post-success "what next", clearer/less-scattered menu, Back/Forward navigation at every step. Chosen extras: rate-lock warning, favorites, custodial recovery reminder.
+- ✅ **Single edit-in-place wizard** — the whole guided flow (Step 1/5 source net → send coin → dest net → receive coin → amount → recipient → refund → Step 5/5 privacy) lives in ONE message that edits itself; breadcrumb shows selections so far. No more scattered messages.
+- ✅ **Back at every step** via `nav:<step>` (srcnet/srccoin/dstnet/dstcoin/amount/recipient/refund) — wrong chain/coin no longer means restart.
+- ✅ **Clean main menu** — 🚀 Start a swap · ⚡ Quick Base USDC→Starknet · ⭐ favorites · Addresses/History · Privacy/Clear. Networks/coins ordered popular-first.
+- ✅ **Tx-hash notifications** — near_client.get_status now parses swapDetails.originChainTxHashes/destinationChainTxHashes (hash + explorerUrl). Poller posts clickable explorer links on deposit-detected and delivered; custodial chunk sends link via evm.explorer_tx().
+- ✅ **Timely lifecycle pings** — deposit detected → swapping → delivered (exact amount + USD + tx link) → refunded/failed (with reason); 15-min "still waiting" nudge; slow-swap heads-up; rate-expired warning with 🔄 Refresh-rate (`rq:<sid>` re-quotes fresh address).
+- ✅ **What-next after success** — 🔁 Same again · 🔀 Reverse · 🌀 New swap · ⭐ Save route (`rpt:`/`rev:`/`start:uni`/`savefav:`).
+- ✅ **Favorites** — savefav pushes {label, route} (capped 8) to users.favorites; menu shows fav buttons; `fav:i` one-taps into amount step.
+- ✅ **Auto-recovery** — global error handler & conversation timeout show a ▶️ Continue button (`menu:open`) that resets state and reopens the menu; ConversationHandler `allow_reentry=True`; NL entry-point gated by verb regex so it no longer cannibalizes in-state text handlers (root-cause bug fixed).
+- ✅ **Custodial recovery reminder** — pay-once wallet unfunded after 30 min → one reminder listing what's still needed + recovery-key hint.
+- Verified: pytest suite **23/23 PASSED** (iteration_4.json) after fixing the entry_point/allow_reentry cannibalization bug. Bot @swaswabotbot live, catalog 196 assets.
+- Backlog/next: X-Telegram-Bot-Api-Secret-Token header check; larger split totals vs NEAR $1000/route min; consider splitting bot.py into modules; Layerswap for true USDC→USDC Starknet (needs user API key).
