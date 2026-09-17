@@ -1,0 +1,174 @@
+{
+  "project_title": "Base to Starknet USDC Auto-Bridge Wallet",
+  "app_type": "hybrid_fullstack",
+  "archetype": "THE PERFORMANCE PRO & ELECTRIC NEON (DeFi Command Center)",
+  "theme": "dark",
+  "design_philosophy": {
+    "concept": "Tactical Cross-Chain Intent Terminal",
+    "tone": "Ultra-precise, institutional-grade, zero-friction, responsive & animated",
+    "core_metaphor": "Relay Portal & Autonomous Intent Engine",
+    "principles": [
+      "Tactical Depth over Flatness: Staked tonal depth (#05070A -> #0C1017 -> #141A24) with crisp 1px borders",
+      "Real-time Intent Visibility: Clear visual status pipeline showing Base Deposit -> Bridge Relayer -> Starknet Settlement",
+      "Instant Actionability: One-click fresh deposit address creation, auto-generated QR codes, instant copy buttons",
+      "Zero-Clutter Information Hierarchy: Key stats (Slippage, Bridge Provider, Fee, Estimated Time) cleanly exposed without noise"
+    ]
+  },
+  "color_palette": {
+    "background": {
+      "abyss": "#05070A",
+      "card_surface": "#0C1017",
+      "card_hover": "#141A24",
+      "glass_panel": "rgba(12, 16, 23, 0.75)",
+      "modal_overlay": "rgba(3, 5, 8, 0.85)"
+    },
+    "brand_chains": {
+      "base_blue": "#0052FF",
+      "base_glow": "rgba(0, 82, 255, 0.25)",
+      "starknet_purple": "#7D52F4",
+      "starknet_glow": "rgba(125, 82, 244, 0.25)",
+      "usdc_blue": "#2775CA"
+    },
+    "status": {
+      "pending_amber": "#F59E0B",
+      "bridging_cyan": "#06B6D4",
+      "completed_emerald": "#10B981",
+      "failed_rose": "#F43F5E"
+    },
+    "accents": {
+      "electric_lime": "#10B981",
+      "neon_indigo": "#6366F1",
+      "cyber_border": "rgba(255, 255, 255, 0.08)",
+      "active_border": "rgba(0, 82, 255, 0.5)"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "muted": "#64748B",
+      "highlight": "#38BDF8"
+    }
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Chivo, Outfit, sans-serif",
+      "h1": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-lg sm:text-xl font-semibold tracking-normal",
+      "h4": "text-base font-medium"
+    },
+    "body": {
+      "font_family": "Inter, -apple-system, sans-serif",
+      "standard": "text-sm text-slate-300 leading-relaxed",
+      "small": "text-xs text-slate-400 font-mono",
+      "label": "text-xs font-semibold tracking-wider uppercase text-slate-400"
+    },
+    "monospace": {
+      "font_family": "JetBrains Mono, Source Code Pro, monospace",
+      "addresses": "font-mono text-xs sm:text-sm tracking-wide text-cyan-300"
+    }
+  },
+  "spacing_and_layout": {
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8",
+    "grid_structure": "grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8",
+    "sections": {
+      "bridge_widget_col": "col-span-12 lg:col-span-5 space-y-6",
+      "tracker_and_history_col": "col-span-12 lg:col-span-7 space-y-6"
+    },
+    "card_padding": "p-5 sm:p-6 md:p-8"
+  },
+  "components_structure": {
+    "header": {
+      "title": "Base -> Starknet USDC Relayer Terminal",
+      "badges": ["Base Mainnet", "Starknet Mainnet", "Layerswap / NEAR Intents Enabled"],
+      "live_stats": ["Base Gas: ~0.001 Gwei", "Avg Bridge Time: ~45s", "Active Relayers: 100%"]
+    },
+    "generate_deposit_card": {
+      "inputs": [
+        "Starknet Destination Address (0x... format with validation & visual jazz icon)",
+        "Amount Input (USDC amount on Base, auto calculates expected USDC received on Starknet)",
+        "Bridge Provider Selector Toggle (Layerswap vs NEAR Intents)"
+      ],
+      "actions": [
+        "Generate Deposit Address Button (creates new dynamic single-use deposit address on Base bound to user's Starknet destination)"
+      ]
+    },
+    "active_deposit_display_card": {
+      "features": [
+        "Display generated Base USDC deposit address in highlighted code box",
+        "Copy to Clipboard button with visual toast feedback",
+        "Interactive SVG / Canvas QR Code generator for mobile wallet scanning",
+        "Deposit countdown / validity indicator",
+        "Explicit instructions: 'Send Base USDC only to this address. Funds will be auto-swapped to Starknet USDC.'"
+      ]
+    },
+    "live_status_tracker": {
+      "timeline_steps": [
+        "1. Waiting for Base USDC Deposit",
+        "2. Deposit Detected on Base Chain",
+        "3. Processing Cross-Chain Intent (Layerswap / NEAR Intents)",
+        "4. USDC Dispatched to Starknet Destination"
+      ],
+      "realtime_feedback": "Animated pulse ring, timer duration counter, Base scan link & Starknet scan link"
+    },
+    "bridge_history_table": {
+      "columns": [
+        "Swap ID",
+        "Base Deposit Addr",
+        "Starknet Destination",
+        "Amount (USDC)",
+        "Provider",
+        "Status (Badge: Pending / Bridging / Completed / Failed)",
+        "Timestamp",
+        "Actions (Inspect Modal / Explorer Links)"
+      ],
+      "features": [
+        "Filter by Status (All / Active / Completed)",
+        "Search by Address or Swap ID",
+        "Manual Sync / Refresh button"
+      ]
+    },
+    "swap_detail_modal": {
+      "details": [
+        "Full Swap UUID & Relayer Hash",
+        "Base Tx Hash & Explorer Link (basescan.org)",
+        "Starknet Tx Hash & Explorer Link (starkscan.co)",
+        "Execution Fee & Exchange Rate Breakdown",
+        "Raw Intent Payload & JSON View toggle"
+      ]
+    }
+  },
+  "interactive_states_and_animations": {
+    "hover": "hover:border-cyan-500/50 hover:bg-slate-900/80 transition-all duration-200 shadow-lg shadow-cyan-950/20",
+    "active": "active:scale-[0.99] transition-transform",
+    "animations": {
+      "pulse_dot": "animate-ping inline-flex h-2 w-2 rounded-full bg-cyan-400 opacity-75",
+      "step_progress": "transition-all duration-500 ease-in-out",
+      "modal_fade": "transition-opacity duration-300 ease-out"
+    }
+  },
+  "image_urls": {
+    "abstract_neon_bg": "https://images.unsplash.com/photo-1728739529355-31dcaefd82b7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwxfHxjcnlwdG8lMjB3YWxsZXQlMjB0ZWNobm9sb2d5JTIwbmV0d29yayUyMGFic3RyYWN0JTIwZGlnaXRhbCUyMG5lb258ZW58MHx8fHwxNzg5Njc0NzQyfDA&ixlib=rb-4.1.0&q=85",
+    "blockchain_tablet": "https://images.pexels.com/photos/9577240/pexels-photo-9577240.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+  },
+  "data_testid_conventions": {
+    "starknet_input": "starknet-address-input",
+    "amount_input": "deposit-amount-input",
+    "generate_button": "generate-deposit-address-button",
+    "deposit_address_box": "generated-deposit-address-display",
+    "copy_address_button": "copy-deposit-address-button",
+    "qr_code_container": "deposit-qr-code-container",
+    "provider_select": "bridge-provider-select",
+    "bridge_status_tracker": "live-bridge-status-tracker",
+    "history_table": "transaction-history-table",
+    "history_row": "history-item-row",
+    "swap_detail_modal": "swap-detail-modal"
+  },
+  "instructions_to_main_agent": [
+    "Ensure file path /app/design_guidelines.json is respected and correctly written.",
+    "Use JavaScript / React (.js files) as per prompt requirements.",
+    "Import Lucide icons (lucide-react) for visual indicators: ArrowRightLeft, Copy, Check, ExternalLink, RefreshCw, ShieldCheck, Zap, Fuel, Layers, AlertCircle.",
+    "Use sonner for instant copy and transaction status notifications.",
+    "All interactive elements MUST contain appropriate data-testid attributes.",
+    "Implement real backend endpoints or mock fallback API handlers so the user can test instant deposit address creation, auto-polling transaction status updates, and history list persistence."
+  ]
+}
