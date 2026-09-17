@@ -7,6 +7,7 @@ import asyncio
 import io
 import logging
 import re
+import secrets
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -68,6 +69,15 @@ def _short(addr: str) -> str:
     return f"{addr[:8]}...{addr[-6:]}" if addr and len(addr) > 16 else addr
 
 
+def _friendly_err(e: Exception) -> str:
+    s = str(e).lower()
+    if "timeout" in s or "timed out" in s or not str(e).strip():
+        return "the bridge is busy right now — please try again in a moment"
+    if "min" in s and "amount" in s:
+        return "that amount is below the bridge minimum — try a bit more"
+    return str(e)[:180]
+
+
 def _qr_bytes(text: str) -> io.BytesIO:
     img = qrcode.make(text)
     bio = io.BytesIO()
@@ -111,12 +121,14 @@ async def cmd_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         quote = await near.create_swap(amount, recipient, refund)
     except Exception as e:
         logger.exception("invoice quote failed")
-        await update.message.reply_text(f"❌ Couldn't create the invoice: {str(e)[:200]}")
+        await update.message.reply_text(f"❌ Couldn't create the invoice: {_friendly_err(e)}")
         return
 
     deposit = quote["deposit_address"]
     link = _payment_link(deposit, amount)
+    sid = secrets.token_hex(4)
     await db.swaps.insert_one({
+        "sid": sid,
         "chat_id": chat_id,
         "deposit_address": deposit,
         "deposit_memo": quote.get("deposit_memo"),
@@ -131,24 +143,16 @@ async def cmd_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
     memo_line = f"\nMemo: `{quote['deposit_memo']}`" if quote.get("deposit_memo") else ""
-    await context.bot.send_photo(
-        chat_id,
-        photo=InputFile(_qr_bytes(link)),
-        caption=(
-            f"🧾 *Invoice — {amount} USDC on Base*\n\n"
-            f"Deposit address:\n`{deposit}`{memo_line}\n\n"
-            "Scan the QR — it pre-fills token, network & amount in the wallet.\n"
-            "_Share this card with your client. They pay USDC on Base, it auto-arrives on your Starknet._"
-        ),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 Copy address", callback_data=f"cpy:a:{deposit}")],
-            [InlineKeyboardButton("📋 Copy payment link", callback_data=f"cpy:l:{link[:60]}")],
-        ]),
+    caption = (
+        f"🧾 *Invoice — {amount} USDC on Base*\n\n"
+        f"Deposit address:\n`{deposit}`{memo_line}\n\n"
+        "Scan the QR — it pre-fills token, network & amount in the client's wallet.\n"
+        "_Forward this to your client. They pay USDC on Base; it auto-arrives on your Starknet._"
     )
+    await _send_deposit_card(context.bot, chat_id, link, caption, sid)
     await context.bot.send_message(
         chat_id,
-        f"Tap to copy the address:\n\n`{deposit}`\n\nPayment link:\n{link}",
+        f"👇 Tap to copy the address:\n`{deposit}`\n\n👇 Tap to copy the payment link:\n`{link}`",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -169,6 +173,44 @@ def _payment_link(deposit_address: str, amount: Decimal) -> str:
         f"ethereum:pay-{BASE_USDC_CONTRACT}@{BASE_CHAIN_ID}/transfer"
         f"?address={deposit_address}&uint256={raw}"
     )
+
+
+async def _send_deposit_card(bot, chat_id, qr_text, caption, sid):
+    """Send the QR deposit/invoice card with a Cancel button; fall back to text."""
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Cancel transaction", callback_data=f"cxl:{sid}")]])
+    try:
+        await bot.send_photo(
+            chat_id, photo=InputFile(_qr_bytes(qr_text)),
+            caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=kb,
+        )
+    except Exception:
+        logger.exception("deposit card photo failed; sending text fallback")
+        await bot.send_message(chat_id, caption, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
+
+async def cb_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    sid = q.data.split(":", 1)[1]
+    db = _db(context)
+    swap = await db.swaps.find_one({"sid": sid, "chat_id": q.message.chat.id})
+    if not swap:
+        await q.answer("This transaction was not found.", show_alert=True)
+        return
+    if swap.get("status") == "PENDING_DEPOSIT":
+        await db.swaps.update_one({"_id": swap["_id"]}, {"$set": {"status": "CANCELLED"}})
+        await q.answer("Transaction cancelled.")
+        try:
+            await q.edit_message_caption(
+                caption="✖️ *Transaction cancelled.*\nDo not send any funds to that address.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+    else:
+        await q.answer("Too late to cancel — a deposit was already detected on-chain.", show_alert=True)
 
 
 # ---------- basic commands ----------
@@ -396,14 +438,19 @@ async def amount_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         quote = await near.create_swap(amount, recipient, refund)
     except Exception as e:
         logger.exception("quote failed")
-        await wait.edit_text(f"❌ Couldn't create the bridge: {str(e)[:200]}")
+        await wait.edit_text(f"❌ Couldn't create the bridge: {_friendly_err(e)}")
+        context.user_data.clear()
         return ConversationHandler.END
 
     db = _db(context)
     chat_id = update.effective_chat.id
+    deposit = quote["deposit_address"]
+    link = _payment_link(deposit, amount)
+    sid = secrets.token_hex(4)
     await db.swaps.insert_one({
+        "sid": sid,
         "chat_id": chat_id,
-        "deposit_address": quote["deposit_address"],
+        "deposit_address": deposit,
         "deposit_memo": quote.get("deposit_memo"),
         "recipient": recipient,
         "refund": refund,
@@ -418,18 +465,22 @@ async def amount_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     eta = quote.get("time_estimate")
     caption = (
         "✅ *Deposit address ready*\n\n"
-        f"Send exactly *{amount} USDC* on *Base* to:\n`{quote['deposit_address']}`{memo_line}\n\n"
+        f"Send exactly *{amount} USDC* on *Base* to:\n`{deposit}`{memo_line}\n\n"
         f"You'll receive *~{quote.get('amount_out_formatted','?')} STRK* "
         f"(~${quote.get('amount_out_usd','?')}) on Starknet\n"
         f"→ `{_short(recipient)}`\n\n"
         f"⏱ Est. arrival: ~{eta}s after your deposit confirms\n"
-        "🔒 This address is single-use for your privacy.\n\n"
-        "_I'll message you the moment it's detected and completed._"
+        "🔒 Single-use address. Scan to auto-fill the amount in your wallet."
     )
-    await wait.delete()
-    await context.bot.send_photo(
-        chat_id, photo=InputFile(_qr_bytes(quote["deposit_address"])),
-        caption=caption, parse_mode=ParseMode.MARKDOWN,
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    await _send_deposit_card(context.bot, chat_id, link, caption, sid)
+    await context.bot.send_message(
+        chat_id,
+        f"👇 Tap to copy the address:\n`{deposit}`",
+        parse_mode=ParseMode.MARKDOWN,
     )
     context.user_data.clear()
     return ConversationHandler.END
@@ -462,7 +513,7 @@ async def _poller(app: Application):
     }
     while True:
         try:
-            cur = db.swaps.find({"status": {"$nin": list(TERMINAL_STATUSES)}})
+            cur = db.swaps.find({"status": {"$nin": list(TERMINAL_STATUSES) + ["CANCELLED"]}})
             active = await cur.to_list(200)
             for s in active:
                 try:
@@ -512,7 +563,31 @@ async def stop_poller():
 
 # ---------- application factory ----------
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.exception("handler error: %s", context.error)
+    logger.error("handler error", exc_info=context.error)
+    try:
+        chat_id = None
+        if isinstance(update, Update) and update.effective_chat:
+            chat_id = update.effective_chat.id
+        if chat_id:
+            await context.bot.send_message(
+                chat_id,
+                "⚠️ Something went wrong on my side. Please try again, or send /cancel and restart.",
+            )
+    except Exception:
+        pass
+
+
+async def conv_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    try:
+        if update and update.effective_chat:
+            await context.bot.send_message(
+                update.effective_chat.id,
+                "⌛ Session timed out. Tap /bridge to start again.",
+            )
+    except Exception:
+        pass
+    return ConversationHandler.END
 
 
 def create_application(token: str, db, near: NearBridgeClient) -> Application:
@@ -532,9 +607,14 @@ def create_application(token: str, db, near: NearBridgeClient) -> Application:
             BR_REFUND: [CallbackQueryHandler(cb_refund, pattern="^bs:")],
             BR_REFUND_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, refund_text)],
             BR_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, amount_text)],
+            ConversationHandler.TIMEOUT: [
+                MessageHandler(filters.ALL, conv_timeout),
+                CallbackQueryHandler(conv_timeout),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False,
+        conversation_timeout=300,
     )
 
     app.add_handler(conv)
@@ -545,6 +625,6 @@ def create_application(token: str, db, near: NearBridgeClient) -> Application:
     app.add_handler(CommandHandler("addresses", cmd_addresses))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("invoice", cmd_invoice))
-    app.add_handler(CallbackQueryHandler(cb_copy, pattern="^cpy:"))
+    app.add_handler(CallbackQueryHandler(cb_cancel, pattern="^cxl:"))
     app.add_handler(CallbackQueryHandler(cb_delete, pattern="^del:"))
     return app
