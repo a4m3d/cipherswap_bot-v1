@@ -36,6 +36,27 @@ def supported(network: str) -> bool:
     return network in EVM_NETWORKS
 
 
+EXPLORERS = {
+    "base": "https://basescan.org/tx/",
+    "eth": "https://etherscan.io/tx/",
+    "arb": "https://arbiscan.io/tx/",
+    "op": "https://optimistic.etherscan.io/tx/",
+    "bsc": "https://bscscan.com/tx/",
+    "pol": "https://polygonscan.com/tx/",
+    "avax": "https://snowtrace.io/tx/",
+    "gnosis": "https://gnosisscan.io/tx/",
+    "scroll": "https://scrollscan.com/tx/",
+}
+
+
+def explorer_tx(network, txhash):
+    base = EXPLORERS.get(network)
+    if not base or not txhash:
+        return None
+    h = txhash if str(txhash).startswith("0x") else "0x" + str(txhash)
+    return base + h
+
+
 def new_wallet():
     acct = Account.create()
     return acct.address, acct.key.hex()

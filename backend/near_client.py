@@ -148,4 +148,22 @@ class NearBridgeClient:
         if deposit_memo:
             params["depositMemo"] = deposit_memo
         data = await self._request("GET", "/v0/status", params=params)
-        return {"status": data.get("status", "UNKNOWN"), "raw": data}
+        sd = data.get("swapDetails") or {}
+
+        def _first(key):
+            arr = sd.get(key) or []
+            if arr and isinstance(arr[0], dict):
+                return arr[0].get("hash"), arr[0].get("explorerUrl")
+            return None, None
+
+        o_hash, o_url = _first("originChainTxHashes")
+        d_hash, d_url = _first("destinationChainTxHashes")
+        return {
+            "status": data.get("status", "UNKNOWN"),
+            "origin_tx": o_hash, "origin_tx_url": o_url,
+            "dest_tx": d_hash, "dest_tx_url": d_url,
+            "amount_out_formatted": sd.get("amountOutFormatted"),
+            "amount_out_usd": sd.get("amountOutUsd"),
+            "refund_reason": data.get("refundReason") or sd.get("refundReason"),
+            "raw": data,
+        }
